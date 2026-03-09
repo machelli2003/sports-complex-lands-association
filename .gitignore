@@ -1,0 +1,48 @@
+# Node and Python ignores
+node_modules/
+frontend/node_modules/
+
+# Virtual environments
+venv/
+backend/venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment files
+.env
+.env.local
+.env.*
+
+# Build directories
+dist/
+build/
+
+# Frontend build
+frontend/build/
+
+# IDE/editor
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test/cache
+.pytest_cache/
+
+# Instance files (uploads/receipts)
+instance/uploads/
+instance/receipts/
+
+# Logs
+*.log
+
+# Misc
+coverage/
+coverage.xml
+npm-debug.log*
+
+# Add any platform-specific or sensitive files below

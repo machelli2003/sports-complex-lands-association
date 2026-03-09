@@ -1,0 +1,2 @@
+MongoDB: test
+Collections: ['stages', 'local_associations', 'payment_types', 'users', 'payments', 'clients']

@@ -1,0 +1,25 @@
+Will create DB at: C:\Users\_MONI_\Desktop\Sports Complex\backend\instance\sports_complex.db
+[OK] Payment blueprint registered at /api/payments
+[OK] Client payment routes registered at /api/clients/<id>/payment-amounts
+
+[INFO] Registered routes:
+  {'POST', 'OPTIONS'} /api/payments
+  {'HEAD', 'GET', 'OPTIONS'} /api/receipts/<payment_id>
+  {'HEAD', 'GET', 'OPTIONS'} /api/payments/<client_id>
+  {'HEAD', 'GET', 'OPTIONS'} /api/payments/<client_id>/available-types
+  {'HEAD', 'GET', 'OPTIONS'} /api/payments/<client_id>/outstanding-balance
+  {'HEAD', 'GET', 'OPTIONS'} /api/stages/<stage_id>/payment-types
+  {'HEAD', 'GET', 'OPTIONS'} /api/reports/payment-types
+  {'HEAD', 'GET', 'OPTIONS'} /api/reports/outstanding-payments
+  {'HEAD', 'GET', 'OPTIONS'} /api/payment-types
+  {'POST', 'OPTIONS'} /api/payment-types
+  {'PUT', 'OPTIONS'} /api/payment-types/<payment_type_id>
+  {'DELETE', 'OPTIONS'} /api/payment-types/<payment_type_id>
+  {'HEAD', 'GET', 'OPTIONS'} /api/clients/<client_id>/payment-amounts
+  {'POST', 'OPTIONS'} /api/clients/<client_id>/payment-amounts
+  {'PUT', 'OPTIONS'} /api/clients/<client_id>/payment-amounts/<payment_type_id>
+  {'DELETE', 'OPTIONS'} /api/clients/<client_id>/payment-amounts/<payment_type_id>
+
+Using URI: sqlite:///C:\Users\_MONI_\Desktop\Sports Complex\backend\instance\sports_complex.db
+Tables created successfully!
+Database file exists: True
