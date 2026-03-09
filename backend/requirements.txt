@@ -18,4 +18,4 @@ flask-limiter
 sentry-sdk
 prometheus_client
 pytest
-mongomock
+gunicorn==21.2.0
