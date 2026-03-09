@@ -320,3 +320,11 @@ if __name__ == '__main__':
             f.write(traceback.format_exc())
         print(f"CRITICAL ERROR: {e}")
         traceback.print_exc()
+    try:
+        app = create_app()
+        application = app
+    except Exception:
+        # If initialization fails at import time, avoid crashing the import —
+        # the server (or diagnostics) can import and inspect the module.
+        app = None
+        application = None
