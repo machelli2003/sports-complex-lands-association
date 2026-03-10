@@ -67,7 +67,7 @@ def create_app():
         except Exception as e:
             log.warning(f'[WARN] Could not connect to MongoDB: {e}')
 
-    cors_origins = os.getenv('CORS_ORIGINS', '*')
+    cors_origins = os.getenv('CORS_ORIGINS', 'https://sports-complex-lands-association-1.onrender.com')
     origins = [o.strip() for o in cors_origins.split(',')] if cors_origins and cors_origins != '*' else '*'
     CORS(app, resources={r"/api/*": {"origins": origins}})
 
