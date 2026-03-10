@@ -22,7 +22,9 @@ function LoginPage() {
       }
     } catch (err) {
       console.error(err);
-      setError('Invalid credentials or server error');
+      // Prefer the server-provided message when available for better debugging
+      const serverMsg = err?.response?.data?.message || err?.response?.data?.error || err?.message;
+      setError(serverMsg || 'Invalid credentials or server error');
     }
   };
   return (

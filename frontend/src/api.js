@@ -13,7 +13,7 @@ const API_BASE = envApi
 
 export { API_BASE };
 
-// Debug: show which backend base URL the frontend resolved at runtime
+// Debug: show which backend base URL the frontend resolvInvalid credentials or server errord at runtime
 try {
   // eslint-disable-next-line no-console
   console.debug('API_BASE:', API_BASE);
