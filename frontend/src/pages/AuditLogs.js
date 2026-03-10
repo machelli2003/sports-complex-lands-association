@@ -19,6 +19,7 @@ import {
 } from '@mui/material';
 import { History, Search, Info, User, Activity } from 'lucide-react';
 import axios from 'axios';
+import { API_BASE } from '../api';
 import PasswordProtection from '../components/PasswordProtection';
 
 function AuditLogs() {
@@ -31,10 +32,8 @@ function AuditLogs() {
     const fetchLogs = async () => {
         try {
             setLoading(true);
-            const token = localStorage.getItem('token');
-            const response = await axios.get(`http://127.0.0.1:5001/api/audit-logs`, {
-                params: { ...filters, page, per_page: 20 },
-                headers: { Authorization: `Bearer ${token}` }
+            const response = await axios.get(`${API_BASE}/audit-logs`, {
+                params: { ...filters, page, per_page: 20 }
             });
             setLogs(response.data.logs);
             setTotalPages(response.data.pages);

@@ -174,8 +174,48 @@ def create_app():
     limiter = Limiter(key_func=get_remote_address, default_limits=[rate_limit])
     limiter.init_app(app)
 
-    REQUEST_COUNT = Counter('app_request_count', 'Total HTTP requests', ['method', 'endpoint', 'http_status'])
-    REQUEST_LATENCY = Histogram('app_request_latency_seconds', 'Request latency', ['endpoint'])
+    # Ensure we don't register duplicate Prometheus timeseries when create_app()
+    # is called multiple times (debug modules/imports). Reuse existing collectors
+    # from the default registry when available.
+    from prometheus_client import REGISTRY
+
+    # Create metrics, but if they are already registered (ValueError), reuse
+    # the existing collector from the default REGISTRY internals.
+    try:
+        REQUEST_COUNT = Counter('app_request_count', 'Total HTTP requests', ['method', 'endpoint', 'http_status'])
+    except ValueError:
+        # Try to reuse existing collector from registry internals
+        REQUEST_COUNT = None
+        try:
+            REQUEST_COUNT = REGISTRY._names_to_collectors.get('app_request_count')
+        except Exception:
+            REQUEST_COUNT = None
+        if REQUEST_COUNT is None:
+            # Last resort: create a no-op counter wrapper
+            class _Noop:
+                def labels(self, *args, **kwargs):
+                    class _L:
+                        def inc(self, *a, **k):
+                            return None
+                    return _L()
+            REQUEST_COUNT = _Noop()
+
+    try:
+        REQUEST_LATENCY = Histogram('app_request_latency_seconds', 'Request latency', ['endpoint'])
+    except ValueError:
+        REQUEST_LATENCY = None
+        try:
+            REQUEST_LATENCY = REGISTRY._names_to_collectors.get('app_request_latency_seconds')
+        except Exception:
+            REQUEST_LATENCY = None
+        if REQUEST_LATENCY is None:
+            class _NoopHist:
+                def labels(self, *args, **kwargs):
+                    class _L:
+                        def observe(self, *a, **k):
+                            return None
+                    return _L()
+            REQUEST_LATENCY = _NoopHist()
 
     @app.before_request
     def _before_request_metrics():
