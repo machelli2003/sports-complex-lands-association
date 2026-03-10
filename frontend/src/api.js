@@ -7,9 +7,9 @@ import axios from 'axios';
 
 const envApi = process.env.REACT_APP_API_URL || '';
 // Use relative `/api` in production deployments to avoid hardcoded localhost URLs.
-const API_BASE = process.env.NODE_ENV === 'production'
-  ? '/api'
-  : (envApi ? `${envApi.replace(/\/$/, '')}/api` : '/api');
+const API_BASE = envApi
+  ? `${envApi.replace(/\/$/, '')}/api`
+  : '/api';
 
 export { API_BASE };
 
