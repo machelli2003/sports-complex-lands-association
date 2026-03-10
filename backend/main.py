@@ -137,17 +137,9 @@ def create_app():
         if 'payment' in rule.rule:
             print(f"  {rule.methods} {rule.rule}")
     print()
-
-    app.static_folder = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build')
-    app.static_url_path = '/'
-
-    @app.route('/', defaults={'path': ''})
-    @app.route('/<path:path>')
-    def serve(path):
-        if path and os.path.exists(os.path.join(app.static_folder, path)):
-            return send_from_directory(app.static_folder, path)
-        else:
-            return send_from_directory(app.static_folder, 'index.html')
+    @app.route('/')
+    def index():
+        return jsonify({'message': 'Sports Complex API is running'}), 200
 
     @app.route('/health')
     def health():
