@@ -1,4 +1,5 @@
 import os
+import logging
 from app.file_utils import validate_file
 from flask import Blueprint, request, jsonify
 from app.models import Client, LocalAssociation, Stage, ClientStage, Payment, PaymentType, ClientDocument, User
@@ -173,7 +174,17 @@ def get_all_clients():
 @client_bp.route('/clients/dashboard', methods=['GET'])
 @jwt_required()
 def get_dashboard():
+    log = logging.getLogger(__name__)
     try:
+        log.info('get_dashboard called')
+        log.info('ENV: MONGO_URI=%s CORS_ORIGINS=%s', os.getenv('MONGO_URI'), os.getenv('CORS_ORIGINS'))
+        # Quick DB connectivity check
+        try:
+            sample_client = Client.objects.first()
+            log.info('DB check: sample client present=%s', bool(sample_client))
+        except Exception:
+            log.exception('DB connectivity check failed')
+
         total_clients = Client.objects.count()
         active_clients = Client.objects(status='active').count()
         completed_clients = Client.objects(status='completed').count()
@@ -256,6 +267,7 @@ def get_dashboard():
     except Exception as e:
         import traceback, sys
         tb = traceback.format_exc()
+        log.exception('get_dashboard exception: %s', e)
         print('DEBUG: get_dashboard exception:', tb, file=sys.stderr)
         return jsonify({'error': 'Server error', 'details': str(e), 'trace': tb}), 500
 

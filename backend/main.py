@@ -67,9 +67,13 @@ def create_app():
         except Exception as e:
             log.warning(f'[WARN] Could not connect to MongoDB: {e}')
 
-    cors_origins = os.getenv('CORS_ORIGINS', 'https://sports-complex-lands-association-1.onrender.com')
+    # Allow cross-origin requests to the API. In production you may want to
+    # restrict this via the CORS_ORIGINS env var, but default to permissive
+    # to avoid CORS-related errors from browser clients hosted on other
+    # subdomains (Render uses multiple domains for static/frontends).
+    cors_origins = os.getenv('CORS_ORIGINS', '*')
     origins = [o.strip() for o in cors_origins.split(',')] if cors_origins and cors_origins != '*' else '*'
-    CORS(app, resources={r"/api/*": {"origins": origins}})
+    CORS(app, resources={r"/api/*": {"origins": origins}}, supports_credentials=True)
 
     @app.after_request
     def _ensure_cors_headers(response):
@@ -227,6 +231,38 @@ def create_app():
     def metrics():
         data = generate_latest()
         return data, 200, {'Content-Type': CONTENT_TYPE_LATEST}
+
+    # Temporary protected debug endpoint. Enabled when DEBUG_TOKEN is set.
+    debug_token = os.getenv('DEBUG_TOKEN')
+    @app.route('/debug/info', methods=['GET'])
+    def debug_info():
+        token = None
+        auth = request.headers.get('Authorization')
+        if auth and auth.startswith('Bearer '):
+            token = auth.split(' ', 1)[1]
+        if not token:
+            token = request.args.get('token')
+        if not debug_token or token != debug_token:
+            return jsonify({'error': 'Unauthorized'}), 401
+        info = {
+            'env': {
+                'CORS_ORIGINS': os.getenv('CORS_ORIGINS'),
+                'MONGO_URI_present': bool(os.getenv('MONGO_URI') or os.getenv('MONGODB_HOST'))
+            },
+            'routes_count': len(list(app.url_map.iter_rules()))
+        }
+        try:
+            db_ok = False
+            try:
+                dbobj = me.connection.get_db()
+                dbobj.client.admin.command('ping')
+                db_ok = True
+            except Exception:
+                db_ok = False
+            info['db_ok'] = db_ok
+        except Exception:
+            info['db_ok'] = 'unknown'
+        return jsonify(info), 200
 
     return app
 
