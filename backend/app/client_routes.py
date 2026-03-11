@@ -2,7 +2,7 @@ import os
 import logging
 from app.file_utils import validate_file
 from flask import Blueprint, request, jsonify
-from app.models import Client, LocalAssociation, Stage, ClientStage, Payment, PaymentType, ClientDocument, User
+from app.models import Client, LocalAssociation, Stage, ClientStage, Payment, PaymentType, ClientDocument, User, ClientPaymentType
 from datetime import datetime, timedelta
 from flask_jwt_extended import jwt_required
 from app.payment_utils import get_client_total_expected
@@ -10,6 +10,45 @@ from app.audit_utils import log_action
 from mongoengine.queryset.visitor import Q
 
 client_bp = Blueprint('client_bp', __name__)
+
+
+def _build_payment_lookups():
+    """
+    Build two dicts in bulk (2 DB calls total) so callers avoid N+1 queries:
+      paid_map   : { str(client_id) -> total_paid }
+      expected_map: { str(client_id) -> total_expected }
+    """
+    # 1. All payment types + defaults (one query)
+    all_pts = list(PaymentType.objects().only('id', 'default_amount'))
+    pt_defaults = {str(pt.id): (pt.default_amount or 0) for pt in all_pts}
+
+    # 2. All custom client-payment-type overrides (one query)
+    all_customs = list(ClientPaymentType.objects().only('client', 'payment_type', 'custom_amount'))
+    custom_map = {}  # { str(client_id) -> { str(pt_id) -> amount } }
+    for c in all_customs:
+        cid = str(c.client.id)
+        ptid = str(c.payment_type.id)
+        custom_map.setdefault(cid, {})[ptid] = c.custom_amount
+
+    # 3. All paid payments (one query)
+    all_paid = list(Payment.objects(status='paid').only('client', 'amount'))
+    paid_map = {}  # { str(client_id) -> total_paid }
+    for p in all_paid:
+        cid = str(p.client.id)
+        paid_map[cid] = paid_map.get(cid, 0) + (p.amount or 0)
+
+    # 4. Compute expected per client from all clients (one query)
+    all_client_ids = [str(c.id) for c in Client.objects().only('id')]
+    expected_map = {}
+    for cid in all_client_ids:
+        client_customs = custom_map.get(cid, {})
+        total = 0
+        for ptid, default in pt_defaults.items():
+            total += client_customs.get(ptid, default)
+        expected_map[cid] = total
+
+    return paid_map, expected_map
+
 
 @client_bp.route('/clients', methods=['POST'])
 @jwt_required()
@@ -80,7 +119,6 @@ def register_client():
         if data.get('date_of_birth') and str(data.get('date_of_birth')).strip():
             client.date_of_birth = datetime.strptime(data['date_of_birth'], '%Y-%m-%d')
     
-    # Prevent duplicate file_number early with a clear error
     existing = Client.objects(file_number=client.file_number).first()
     if existing:
         return jsonify({'error': 'File number already exists'}), 400
@@ -107,6 +145,7 @@ def register_client():
         'client_id': str(client.id),
         'passport_picture': client.passport_picture
     }), 201
+
 
 @client_bp.route('/clients/<client_id>', methods=['GET'])
 @jwt_required()
@@ -140,20 +179,24 @@ def get_client(client_id):
         'outstanding_balance': outstanding_balance
     })
 
+
 @client_bp.route('/clients', methods=['GET'])
 @jwt_required()
 def get_all_clients():
-    """Get all clients for dropdowns and lists"""
-    all_clients = Client.objects()
+    """Get all clients — uses bulk queries to avoid N+1 timeouts."""
+    paid_map, expected_map = _build_payment_lookups()
+
+    all_clients = list(Client.objects())
     clients_data = []
-    
+
     for client in all_clients:
-        total_paid = sum(p.amount for p in Payment.objects(client=client.id, status='paid')) or 0
-        total_expected = get_client_total_expected(client.id)
+        cid = str(client.id)
+        total_paid = paid_map.get(cid, 0)
+        total_expected = expected_map.get(cid, 0)
         outstanding_balance = max(0, total_expected - total_paid)
-        
+
         clients_data.append({
-            'client_id': str(client.id),
+            'client_id': cid,
             'file_number': client.file_number,
             'full_name': client.full_name,
             'phone': client.phone,
@@ -168,8 +211,9 @@ def get_all_clients():
             'total_paid': float(total_paid),
             'outstanding_balance': outstanding_balance
         })
-    
+
     return jsonify(clients_data)
+
 
 @client_bp.route('/clients/dashboard', methods=['GET'])
 @jwt_required()
@@ -177,19 +221,12 @@ def get_dashboard():
     log = logging.getLogger(__name__)
     try:
         log.info('get_dashboard called')
-        log.info('ENV: MONGO_URI=%s CORS_ORIGINS=%s', os.getenv('MONGO_URI'), os.getenv('CORS_ORIGINS'))
-        # Quick DB connectivity check
-        try:
-            sample_client = Client.objects.first()
-            log.info('DB check: sample client present=%s', bool(sample_client))
-        except Exception:
-            log.exception('DB connectivity check failed')
 
         total_clients = Client.objects.count()
         active_clients = Client.objects(status='active').count()
         completed_clients = Client.objects(status='completed').count()
 
-        # Manual grouping for stages
+        # Stage counts
         stages_counts_map = {}
         for c in Client.objects.only('current_stage'):
             stages_counts_map[c.current_stage] = stages_counts_map.get(c.current_stage, 0) + 1
@@ -202,7 +239,7 @@ def get_dashboard():
         end_date = datetime.utcnow()
         start_date = end_date - timedelta(days=365)
 
-        # Monthly revenue via simple grouping
+        # Monthly revenue
         payments_in_year = Payment.objects(payment_date__gte=start_date, status='paid')
         revenue_map = {}
         for p in payments_in_year:
@@ -224,14 +261,15 @@ def get_dashboard():
         pending_payments_count = Payment.objects(status='pending').count()
         total_revenue = sum(p.amount for p in Payment.objects(status='paid')) or 0
 
+        # Outstanding balance — bulk queries
+        paid_map, expected_map = _build_payment_lookups()
         total_outstanding = 0
         clients_with_outstanding = 0
-        for client in Client.objects():
-            client_total_expected = get_client_total_expected(client.id)
-            total_paid = sum(p.amount for p in Payment.objects(client=client.id, status='paid')) or 0
-            outstanding_balance = max(0, client_total_expected - total_paid)
-            total_outstanding += outstanding_balance
-            if outstanding_balance > 0:
+        for cid, expected in expected_map.items():
+            paid = paid_map.get(cid, 0)
+            outstanding = max(0, expected - paid)
+            total_outstanding += outstanding
+            if outstanding > 0:
                 clients_with_outstanding += 1
 
         pending_verifications = ClientDocument.objects(verified=False).count()
@@ -268,8 +306,8 @@ def get_dashboard():
         import traceback, sys
         tb = traceback.format_exc()
         log.exception('get_dashboard exception: %s', e)
-        print('DEBUG: get_dashboard exception:', tb, file=sys.stderr)
         return jsonify({'error': 'Server error', 'details': str(e), 'trace': tb}), 500
+
 
 @client_bp.route('/clients/search', methods=['GET'])
 @jwt_required()
@@ -277,8 +315,7 @@ def search_clients():
     query_str = request.args.get('q', '')
     stage_filter = request.args.get('stage')
     status_filter = request.args.get('status')
-    
-    # Build MongoEngine query using Q
+
     q = Q()
     if query_str:
         q &= (Q(full_name__icontains=query_str) | Q(file_number__icontains=query_str) | Q(phone__icontains=query_str) | Q(ghana_card_number__icontains=query_str))
@@ -290,16 +327,40 @@ def search_clients():
     if status_filter:
         q &= Q(status=status_filter)
 
-    results = Client.objects(q)[:50]
+    results = list(Client.objects(q)[:50])
+
+    if not results:
+        return jsonify([])
+
+    # Bulk lookups for just these clients
+    client_ids = [str(c.id) for c in results]
+
+    all_pts = list(PaymentType.objects().only('id', 'default_amount'))
+    pt_defaults = {str(pt.id): (pt.default_amount or 0) for pt in all_pts}
+
+    all_customs = list(ClientPaymentType.objects(client__in=[c.id for c in results]).only('client', 'payment_type', 'custom_amount'))
+    custom_map = {}
+    for c in all_customs:
+        cid = str(c.client.id)
+        ptid = str(c.payment_type.id)
+        custom_map.setdefault(cid, {})[ptid] = c.custom_amount
+
+    all_paid = list(Payment.objects(client__in=[c.id for c in results], status='paid').only('client', 'amount'))
+    paid_map = {}
+    for p in all_paid:
+        cid = str(p.client.id)
+        paid_map[cid] = paid_map.get(cid, 0) + (p.amount or 0)
 
     clients_data = []
     for client in results:
-        total_paid = sum(p.amount for p in Payment.objects(client=client.id, status='paid')) or 0
-        total_expected = get_client_total_expected(client.id)
+        cid = str(client.id)
+        client_customs = custom_map.get(cid, {})
+        total_expected = sum(client_customs.get(ptid, default) for ptid, default in pt_defaults.items())
+        total_paid = paid_map.get(cid, 0)
         outstanding_balance = max(0, total_expected - total_paid)
 
         clients_data.append({
-            'client_id': str(client.id),
+            'client_id': cid,
             'file_number': client.file_number,
             'full_name': client.full_name,
             'phone': client.phone,
