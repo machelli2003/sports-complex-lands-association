@@ -5,22 +5,30 @@ from datetime import datetime
 def get_applicable_amount(client_id, payment_type_id):
     """Get the applicable amount for a client-payment type combination.
     Returns custom amount if set, otherwise returns default amount."""
+    # Try to fetch custom amount first, fall back to payment type default.
     custom = ClientPaymentType.objects(client=client_id, payment_type=payment_type_id).first()
-
     if custom:
         return custom.custom_amount
-
-    payment_type = PaymentType.objects(id=payment_type_id).first()
+    payment_type = PaymentType.objects(id=payment_type_id).only('default_amount').first()
     return payment_type.default_amount if payment_type else 0
 
 def get_client_total_expected(client_id):
-    """Calculate the total expected amount for a client based on custom/default amounts."""
-    all_payment_types = PaymentType.objects()
-    total = 0
+    """Calculate the total expected amount for a client based on custom/default amounts.
 
+    Optimized: fetch all payment types once and all client-specific custom amounts
+    in a single query to avoid N+1 database queries which can time out on remote
+    DBs (e.g., Render -> Atlas latency).
+    """
+    # Fetch payment types (id + default_amount) once
+    all_payment_types = list(PaymentType.objects().only('id', 'default_amount'))
+
+    # Fetch all custom amounts for this client in one query
+    client_customs = ClientPaymentType.objects(client=client_id)
+    custom_map = {str(c.payment_type.id): c.custom_amount for c in client_customs}
+
+    total = 0
     for pt in all_payment_types:
-        custom = ClientPaymentType.objects(client=client_id, payment_type=pt.id).first()
-        total += custom.custom_amount if custom else pt.default_amount
+        total += custom_map.get(str(pt.id), pt.default_amount or 0)
 
     return total
 
