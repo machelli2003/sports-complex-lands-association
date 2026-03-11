@@ -334,7 +334,8 @@ def add_payment():
         'message': 'Payment recorded successfully',
         'payment_id': str(payment.id),
         'amount_paid': data['amount'],
-        'receipt_path': receipt_path
+        'receipt_path': receipt_path,
+        'client_id': str(client.id)
     }), 201
 
 
