@@ -86,11 +86,23 @@ function ClientPaymentSettings({ clientId, onUpdate }) {
         setSuccess(null);
 
         try {
-            // Prepare data for API
-            const updates = Object.entries(editedAmounts).map(([typeId, amount]) => ({
-                payment_type_id: parseInt(typeId),
-                custom_amount: parseFloat(amount)
-            }));
+            // Validate and prepare data for API
+            const updates = [];
+            for (const [typeId, amountRaw] of Object.entries(editedAmounts)) {
+                const amount = parseFloat(amountRaw);
+                if (Number.isNaN(amount)) {
+                    setError('Please enter valid numeric amounts for all payment types');
+                    setLoading(false);
+                    return;
+                }
+                if (amount < 0) {
+                    setError('Amounts must be zero or positive');
+                    setLoading(false);
+                    return;
+                }
+                // keep payment_type_id as string (backend expects the id string)
+                updates.push({ payment_type_id: String(typeId), custom_amount: amount });
+            }
 
             await updateClientPaymentAmounts(clientId, updates);
             setSuccess('Payment amounts updated successfully');

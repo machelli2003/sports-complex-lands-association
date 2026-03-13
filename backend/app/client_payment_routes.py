@@ -72,8 +72,14 @@ def set_client_payment_amounts(client_id):
             errors.append(f'Payment type {payment_type_id} not found')
             continue
         
-        # Validate amount is positive
-        if float(custom_amount) < 0:
+        # Validate amount is numeric and positive
+        try:
+            amount_val = float(custom_amount)
+        except (TypeError, ValueError):
+            errors.append(f'Invalid amount for {payment_type.payment_name}: {custom_amount}')
+            continue
+
+        if amount_val < 0:
             errors.append(f'Amount must be positive for {payment_type.payment_name}')
             continue
         
@@ -91,8 +97,12 @@ def set_client_payment_amounts(client_id):
             )
             new_custom.save()
         
-        if payment_type.stage_id:
-            affected_stages.add(payment_type.stage_id)
+        if getattr(payment_type, 'stage', None):
+            # store stage id string for later checks
+            try:
+                affected_stages.add(str(payment_type.stage.id))
+            except Exception:
+                pass
             
         updated_count += 1
     
@@ -125,21 +135,27 @@ def update_single_payment_amount(client_id, payment_type_id):
     
     if custom_amount is None:
         return jsonify({'error': 'custom_amount is required'}), 400
-    
-    if float(custom_amount) < 0:
+
+    # validate numeric amount
+    try:
+        amount_val = float(custom_amount)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'custom_amount must be a number'}), 400
+
+    if amount_val < 0:
         return jsonify({'error': 'Amount must be positive'}), 400
-    
+
     # Check if custom amount already exists
     existing = ClientPaymentType.objects(client=client_id, payment_type=payment_type_id).first()
 
     if existing:
-        existing.custom_amount = float(custom_amount)
+        existing.custom_amount = amount_val
         existing.save()
     else:
         new_custom = ClientPaymentType(
             client=client_id,
             payment_type=payment_type_id,
-            custom_amount=float(custom_amount)
+            custom_amount=amount_val
         )
         new_custom.save()
     

@@ -137,32 +137,26 @@ const PrintableRegistrationForm = ({ clientData, autoPrint = false }) => {
           </Box>
 
           {/* PASSPORT */}
-          <Box
-            sx={{
-              position: 'absolute',
-              top: 60,
-              right: 60,
-              width: 120,
-              height: 150,
-              border: '1px solid #000',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              overflow: 'hidden'
-            }}
-          >
-            {clientData.passport_picture_preview ? (
-              <img
-                src={clientData.passport_picture_preview}
-                alt="Passport"
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-              />
-            ) : (
-              <Typography sx={{ fontSize: 10 }}>
-                PASSPORT PHOTO
-              </Typography>
-            )}
-          </Box>
+          <Grid container spacing={2} sx={{ mb: 2 }} alignItems="flex-start">
+            <Grid item xs={8}>
+              {/* header text left intentionally empty to keep layout */}
+            </Grid>
+            <Grid item xs={4} sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <Box sx={{ width: 120, height: 150, border: '1px solid #000', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {clientData.passport_picture_preview ? (
+                  <img
+                    src={clientData.passport_picture_preview}
+                    alt="Passport"
+                    style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                  />
+                ) : (
+                  <Typography sx={{ fontSize: 10 }}>
+                    PASSPORT PHOTO
+                  </Typography>
+                )}
+              </Box>
+            </Grid>
+          </Grid>
 
           {/* META INFO */}
           <Grid container spacing={3} sx={{ mb: 4 }}>

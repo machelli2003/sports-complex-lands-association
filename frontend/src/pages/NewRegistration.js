@@ -117,10 +117,29 @@ function NewRegistration() {
   };
 
   const handleSubmit = async e => {
-    e.preventDefault();
+    if (e && e.preventDefault) e.preventDefault();
     setLoading(true);
     setError('');
     setSuccess('');
+
+    // Ensure every text input across all steps is filled
+    const isFormComplete = () => {
+      const requiredKeys = [
+        'file_number', 'full_name', 'phone', 'ghana_card_number', 'local_association_id',
+        'house_number', 'gps_address', 'next_of_kin', 'marital_status', 'date_of_birth',
+        'hometown', 'place_of_stay', 'family_member_number'
+      ];
+      return requiredKeys.every(k => {
+        const v = form[k];
+        return v !== null && v !== undefined && String(v).trim() !== '';
+      });
+    };
+
+    if (!isFormComplete()) {
+      setError('Please fill all fields in Basic Information, Contact Details, and Additional Information before registering.');
+      setLoading(false);
+      return;
+    }
 
     if (!form.file_number.trim()) {
       setError('File number is required');
@@ -566,20 +585,15 @@ function NewRegistration() {
           ))}
         </Stepper>
 
-        <form onSubmit={(e) => {
+                <form onSubmit={(e) => {
+          // prevent default form submit; submission handled by button click
           e.preventDefault();
-          // If not on final step, validate and advance instead of submitting
-          if (activeStep < steps.length - 1) {
-            const ok = validateStep(activeStep);
-            if (ok) setActiveStep(prev => prev + 1);
-            return;
-          }
-          handleSubmit(e);
         }} onKeyDown={(e) => {
           if (e.key === 'Enter') {
-            // Prevent accidental submit when not on final step
+            // Prevent Enter from submitting the form in all cases
+            e.preventDefault();
+            // If not on final step, validate and advance
             if (activeStep < steps.length - 1) {
-              e.preventDefault();
               const ok = validateStep(activeStep);
               if (ok) setActiveStep(prev => prev + 1);
             }
@@ -649,9 +663,10 @@ function NewRegistration() {
                 </Button>
               ) : (
                 <Button
-                  type="submit"
+                  type="button"
+                  onClick={handleSubmit}
                   variant="contained"
-                  disabled={loading || !isFormValid()}
+                  disabled={loading}
                   startIcon={loading ? null : <CheckCircle size={20} />}
                   sx={{
                     background: '#10B981',
