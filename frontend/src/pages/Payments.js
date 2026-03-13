@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { fetchPayments, addPayment, fetchStages, fetchPaymentTypesByStage, fetchReceiptFile } from '../api';
+import { fetchPayments, addPayment, fetchStages, fetchPaymentTypesByStage, fetchReceiptFile, searchClients } from '../api';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Box,
@@ -77,13 +77,32 @@ function Payments() {
   }, []);
 
   const handleFetch = async () => {
+    if (!clientId) return;
     setLoading(true);
     setError('');
     try {
       const res = await fetchPayments(clientId);
       setRows(res.data.map((p, idx) => ({ id: p.payment_id, ...p })));
     } catch (err) {
-      setError('Could not fetch payments');
+      // Try resolving client name to id
+      try {
+        const searchRes = await searchClients(clientId, '', '');
+        const hits = searchRes.data?.data || searchRes.data || [];
+        if (Array.isArray(hits) && hits.length === 1) {
+          const resolvedId = hits[0].client_id || hits[0].id;
+          const res2 = await fetchPayments(resolvedId);
+          setRows(res2.data.map((p) => ({ id: p.payment_id, ...p })));
+        } else if (Array.isArray(hits) && hits.length > 1) {
+          setError('Multiple clients found; please refine the query or enter the client ID.');
+          setRows([]);
+        } else {
+          setError('Could not fetch payments for that client.');
+          setRows([]);
+        }
+      } catch (e2) {
+        setError('Could not fetch payments');
+        setRows([]);
+      }
     }
     setLoading(false);
   };
@@ -585,10 +604,10 @@ function Payments() {
         </Typography>
         <Box display="flex" gap={2} flexWrap="wrap">
           <TextField
-            label="Client ID"
+            label="Client ID or Name"
             value={clientId}
             onChange={e => setClientId(e.target.value)}
-            placeholder="Enter client ID..."
+            placeholder="Enter client ID or name..."
             sx={{ flex: 1, minWidth: '200px' }}
             InputProps={{
               startAdornment: (
