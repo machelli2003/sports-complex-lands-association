@@ -483,6 +483,11 @@ function NewRegistration() {
                   border: '2px dashed #CBD5E1',
                   background: '#F8FAFC',
                   textAlign: 'center',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minHeight: '160px',
+                  overflow: 'hidden',
                   '&:hover': {
                     borderColor: '#94A3B8'
                   }
@@ -495,9 +500,9 @@ function NewRegistration() {
                   hidden
                   onChange={handleFileChange}
                 />
-                <label htmlFor="passport-input" style={{ cursor: 'pointer', width: '100%' }}>
+                <label htmlFor="passport-input" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}>
                   {previewUrl ? (
-                    <img src={previewUrl} alt="Preview" style={{ maxWidth: '150px', borderRadius: '8px' }} />
+                    <img src={previewUrl} alt="Preview" style={{ maxWidth: '100%', maxHeight: '140px', objectFit: 'contain', borderRadius: '8px' }} />
                   ) : (
                     <Box>
                       <Upload size={40} style={{ color: '#94A3B8', marginBottom: '8px' }} />
@@ -561,7 +566,16 @@ function NewRegistration() {
           ))}
         </Stepper>
 
-        <form onSubmit={handleSubmit} onKeyDown={(e) => {
+        <form onSubmit={(e) => {
+          e.preventDefault();
+          // If not on final step, validate and advance instead of submitting
+          if (activeStep < steps.length - 1) {
+            const ok = validateStep(activeStep);
+            if (ok) setActiveStep(prev => prev + 1);
+            return;
+          }
+          handleSubmit(e);
+        }} onKeyDown={(e) => {
           if (e.key === 'Enter') {
             // Prevent accidental submit when not on final step
             if (activeStep < steps.length - 1) {

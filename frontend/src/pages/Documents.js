@@ -3,7 +3,7 @@ import { Box, Typography, Paper, Button, Table, TableBody, TableCell, TableConta
 import { Upload as UploadIcon, Download as DownloadIcon, CheckCircle as CheckCircleIcon, Description as FileText, Article as Template, Visibility as Eye, Edit, Search, CloudUpload, InsertDriveFile } from '@mui/icons-material';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
 import { saveAs } from 'file-saver';
-import { fetchClients, fetchDocuments, addDocument, verifyDocument, downloadDocument } from '../api';
+import { fetchClients, fetchDocuments, addDocument, verifyDocument, downloadDocument, searchClients } from '../api';
 import PasswordProtection from '../components/PasswordProtection';
 
 function Documents() {
@@ -94,15 +94,32 @@ function Documents() {
       const res = await fetchDocuments(clientId);
       setDocuments(res.data);
     } catch (err) {
-      setError('Failed to fetch documents. Please check the client ID.');
-      setDocuments([]);
+      // Try resolving by client name (fallback)
+      try {
+        const searchRes = await searchClients(clientId, '', '');
+        const hits = searchRes.data?.data || searchRes.data || [];
+        if (Array.isArray(hits) && hits.length === 1) {
+          const resolvedId = hits[0].client_id || hits[0].id;
+          const res2 = await fetchDocuments(resolvedId);
+          setDocuments(res2.data);
+        } else if (Array.isArray(hits) && hits.length > 1) {
+          setError('Multiple clients found; please refine the query or enter the client ID.');
+          setDocuments([]);
+        } else {
+          setError('Failed to fetch documents. Please check the client ID or name.');
+          setDocuments([]);
+        }
+      } catch (e2) {
+        setError('Failed to fetch documents. Please check the client ID or name.');
+        setDocuments([]);
+      }
     }
     setLoading(false);
   };
 
   const handleUploadDocument = async () => {
     if (!documentForm.client_id || !documentForm.document_type) {
-      setError('Client ID and document type are required');
+      setError('Client ID or name and document type are required');
       return;
     }
     if (!selectedFile) {
@@ -112,8 +129,28 @@ function Documents() {
 
     setError('');
     try {
+      // Resolve client id if a name was provided
+      let clientIdToUse = documentForm.client_id;
+      if (isNaN(Number(clientIdToUse))) {
+        // try local clients cache first
+        const matches = clients.filter(c => ((c.full_name || c.client_name || c.client || '') + '').toLowerCase().includes(clientIdToUse.toLowerCase()));
+        if (matches.length === 1) {
+          clientIdToUse = matches[0].client_id || matches[0].id;
+        } else {
+          // fallback to search API
+          const sr = await searchClients(clientIdToUse, '', '');
+          const hits = sr.data?.data || sr.data || [];
+          if (Array.isArray(hits) && hits.length === 1) {
+            clientIdToUse = hits[0].client_id || hits[0].id;
+          } else {
+            setError('Could not resolve client; please enter exact client ID or full name');
+            return;
+          }
+        }
+      }
+
       const formData = new FormData();
-      formData.append('client_id', documentForm.client_id);
+      formData.append('client_id', clientIdToUse);
       formData.append('document_type', documentForm.document_type);
       formData.append('notes', documentForm.notes || '');
       if (selectedFile) {
@@ -479,7 +516,7 @@ function Documents() {
                   </Typography>
                   <Box display="flex" gap={2} flexWrap="wrap">
                     <TextField
-                      label="Client ID"
+                      label="Client ID or Name"
                       value={clientId}
                       onChange={(e) => setClientId(e.target.value)}
                       size="medium"
@@ -662,7 +699,7 @@ function Documents() {
           <DialogContent>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
               <TextField
-                label="Client ID"
+                label="Client ID or Name"
                 value={documentForm.client_id}
                 onChange={(e) => setDocumentForm({ ...documentForm, client_id: e.target.value })}
                 fullWidth
