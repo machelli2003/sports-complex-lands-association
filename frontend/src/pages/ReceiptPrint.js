@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { fetchPayments, fetchClient } from '../api';
+import { fetchPayments, fetchClient, searchClients } from '../api';
 import { Box, Button, CircularProgress, Typography } from '@mui/material';
 import { Print, ArrowBack } from '@mui/icons-material';
 
@@ -22,10 +22,31 @@ function ReceiptPrint() {
         if (storedPayment) {
           const paymentData = JSON.parse(storedPayment);
           setPayment(paymentData);
-          
-          // Fetch client data
-          const clientResponse = await fetchClient(paymentData.client_id);
-          setClient(clientResponse.data);
+          // Fetch client data. Some codepaths stored a client name in `client_id` which
+          // the API expects to be a numeric id. Try fetchClient first, then fall back
+          // to a search by name if the call fails.
+          try {
+            const clientResponse = await fetchClient(paymentData.client_id);
+            setClient(clientResponse.data);
+          } catch (clientErr) {
+            console.warn('fetchClient failed, trying searchClients fallback', clientErr);
+            // If client_id looks like a name or lookup string, try searching clients
+            try {
+              const searchRes = await searchClients(paymentData.client_id, '', '');
+              const found = Array.isArray(searchRes.data) && searchRes.data.length ? searchRes.data[0] : null;
+              if (found) {
+                setClient(found);
+              } else if (paymentData.client) {
+                // As a last resort, use client data embedded in the stored payment
+                setClient(paymentData.client);
+              } else {
+                throw clientErr;
+              }
+            } catch (searchErr) {
+              console.error('Client lookup failed:', searchErr);
+              throw searchErr;
+            }
+          }
           setLoading(false);
           return;
         }
