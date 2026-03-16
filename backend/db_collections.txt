@@ -1,12 +1,12 @@
 MongoDB name: test
 Collections: ['client_payment_types', 'audit_logs', 'stages', 'local_associations', 'payment_types', 'client_documents', 'users', 'client_stages', 'payments', 'clients']
-  client_payment_types: 1
+  client_payment_types: 16
   audit_logs: 86
   stages: 5
   local_associations: 7
   payment_types: 8
   client_documents: 9
   users: 3
-  client_stages: 16
+  client_stages: 23
   payments: 42
   clients: 20

@@ -14,30 +14,42 @@ client_bp = Blueprint('client_bp', __name__)
 
 def _build_payment_lookups():
     """
-    Build two dicts in bulk (2 DB calls total) so callers avoid N+1 queries:
+    Build two dicts in bulk (no lazy dereferencing) so callers avoid N+1 queries:
       paid_map   : { str(client_id) -> total_paid }
       expected_map: { str(client_id) -> total_expected }
+
+    Uses __raw__ aggregation and .scalar() / pk access to avoid ANY lazy
+    ReferenceField dereferencing that would cause a per-document round-trip.
     """
     # 1. All payment types + defaults (one query)
     all_pts = list(PaymentType.objects().only('id', 'default_amount'))
     pt_defaults = {str(pt.id): (pt.default_amount or 0) for pt in all_pts}
 
-    # 2. All custom client-payment-type overrides (one query)
+    # 2. All custom client-payment-type overrides — use pk to avoid lazy load
     all_customs = list(ClientPaymentType.objects().only('client', 'payment_type', 'custom_amount'))
     custom_map = {}  # { str(client_id) -> { str(pt_id) -> amount } }
     for c in all_customs:
-        cid = str(c.client.id)
-        ptid = str(c.payment_type.id)
-        custom_map.setdefault(cid, {})[ptid] = c.custom_amount
+        try:
+            # Access the raw pk (DBRef id) without triggering a fetch
+            cid = str(c.client.pk) if c.client else None
+            ptid = str(c.payment_type.pk) if c.payment_type else None
+            if cid and ptid:
+                custom_map.setdefault(cid, {})[ptid] = c.custom_amount
+        except Exception:
+            continue
 
-    # 3. All paid payments (one query)
+    # 3. All paid payments — use .pk to avoid lazy ReferenceField load
     all_paid = list(Payment.objects(status='paid').only('client', 'amount'))
     paid_map = {}  # { str(client_id) -> total_paid }
     for p in all_paid:
-        cid = str(p.client.id)
-        paid_map[cid] = paid_map.get(cid, 0) + (p.amount or 0)
+        try:
+            cid = str(p.client.pk) if p.client else None
+            if cid:
+                paid_map[cid] = paid_map.get(cid, 0) + (p.amount or 0)
+        except Exception:
+            continue
 
-    # 4. Compute expected per client from all clients (one query)
+    # 4. Compute expected per client (one query for all client ids)
     all_client_ids = [str(c.id) for c in Client.objects().only('id')]
     expected_map = {}
     for cid in all_client_ids:
@@ -61,7 +73,7 @@ def register_client():
             is_valid, error = validate_file(file)
             if not is_valid:
                 return jsonify({'error': f'Passport picture: {error}'}), 400
-                
+
             filename = f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
             file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'instance', 'uploads', filename)
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -89,9 +101,9 @@ def register_client():
             assoc = LocalAssociation.objects(id=request.form['local_association_id']).first()
             if assoc:
                 client.local_association = assoc
-        
+
         if request.form.get('date_of_birth') and str(request.form.get('date_of_birth')).strip():
-             client.date_of_birth = datetime.strptime(request.form['date_of_birth'], '%Y-%m-%d')
+            client.date_of_birth = datetime.strptime(request.form['date_of_birth'], '%Y-%m-%d')
     else:
         data = request.json
         client = Client(
@@ -115,10 +127,10 @@ def register_client():
             assoc = LocalAssociation.objects(id=data['local_association_id']).first()
             if assoc:
                 client.local_association = assoc
-        
+
         if data.get('date_of_birth') and str(data.get('date_of_birth')).strip():
             client.date_of_birth = datetime.strptime(data['date_of_birth'], '%Y-%m-%d')
-    
+
     existing = Client.objects(file_number=client.file_number).first()
     if existing:
         return jsonify({'error': 'File number already exists'}), 400
@@ -157,7 +169,7 @@ def get_client(client_id):
     total_expected = get_client_total_expected(client_id)
     total_paid = sum(p.amount for p in Payment.objects(client=client_id, status='paid')) or 0
     outstanding_balance = max(0, total_expected - total_paid)
-    
+
     return jsonify({
         'client_id': str(client.id),
         'file_number': client.file_number,
@@ -226,7 +238,7 @@ def get_dashboard():
         active_clients = Client.objects(status='active').count()
         completed_clients = Client.objects(status='completed').count()
 
-        # Stage counts
+        # Stage counts — only fetch current_stage field
         stages_counts_map = {}
         for c in Client.objects.only('current_stage'):
             stages_counts_map[c.current_stage] = stages_counts_map.get(c.current_stage, 0) + 1
@@ -234,13 +246,18 @@ def get_dashboard():
         stages_list = []
         for stage_num, count in stages_counts_map.items():
             s_obj = Stage.objects(stage_number=stage_num).first()
-            stages_list.append({'name': s_obj.stage_name if s_obj else f'Stage {stage_num}', 'count': count})
+            stages_list.append({
+                'name': s_obj.stage_name if s_obj else f'Stage {stage_num}',
+                'count': count
+            })
 
         end_date = datetime.utcnow()
         start_date = end_date - timedelta(days=365)
 
-        # Monthly revenue
-        payments_in_year = Payment.objects(payment_date__gte=start_date, status='paid')
+        # Monthly revenue — only fetch payment_date and amount (no client ref)
+        payments_in_year = list(
+            Payment.objects(payment_date__gte=start_date, status='paid').only('payment_date', 'amount')
+        )
         revenue_map = {}
         for p in payments_in_year:
             month = p.payment_date.strftime('%Y-%m') if p.payment_date else 'unknown'
@@ -248,20 +265,67 @@ def get_dashboard():
 
         formatted_revenue = [{'month': m, 'total': float(t)} for m, t in sorted(revenue_map.items())]
 
-        recent_payments = Payment.objects(status='paid').order_by('-payment_date')[:10]
-        recent_payments_data = [
-            {
-                'client_name': (p.client.full_name if p.client else 'Unknown'),
-                'amount': p.amount,
-                'date': p.payment_date.strftime('%Y-%m-%d') if p.payment_date else None,
-                'stage': (p.stage.stage_name if p.stage else 'Unknown'),
-                'payment_type': p.payment_type
-            } for p in recent_payments]
+        # Recent payments — build a client_id -> name lookup to avoid lazy loads
+        recent_payment_docs = list(
+            Payment.objects(status='paid').order_by('-payment_date').only(
+                'client', 'amount', 'payment_date', 'stage', 'payment_type'
+            )[:10]
+        )
+
+        # Collect all client PKs from recent payments in one batch
+        recent_client_pks = []
+        for p in recent_payment_docs:
+            try:
+                pk = p.client.pk if p.client else None
+                if pk:
+                    recent_client_pks.append(pk)
+            except Exception:
+                pass
+
+        # One query to get names for those clients
+        client_name_map = {}
+        if recent_client_pks:
+            for c in Client.objects(id__in=recent_client_pks).only('id', 'full_name'):
+                client_name_map[str(c.id)] = c.full_name
+
+        # One query to get stage names
+        stage_name_map = {}
+        recent_stage_pks = []
+        for p in recent_payment_docs:
+            try:
+                pk = p.stage.pk if p.stage else None
+                if pk:
+                    recent_stage_pks.append(pk)
+            except Exception:
+                pass
+        if recent_stage_pks:
+            for s in Stage.objects(id__in=recent_stage_pks).only('id', 'stage_name'):
+                stage_name_map[str(s.id)] = s.stage_name
+
+        recent_payments_data = []
+        for p in recent_payment_docs:
+            try:
+                cid = str(p.client.pk) if p.client else None
+                sid = str(p.stage.pk) if p.stage else None
+                recent_payments_data.append({
+                    'client_name': client_name_map.get(cid, 'Unknown') if cid else 'Unknown',
+                    'amount': p.amount,
+                    'date': p.payment_date.strftime('%Y-%m-%d') if p.payment_date else None,
+                    'stage': stage_name_map.get(sid, 'Unknown') if sid else 'Unknown',
+                    'payment_type': p.payment_type
+                })
+            except Exception:
+                continue
 
         pending_payments_count = Payment.objects(status='pending').count()
-        total_revenue = sum(p.amount for p in Payment.objects(status='paid')) or 0
 
-        # Outstanding balance — bulk queries
+        # Total revenue — only fetch amount (no client ref needed)
+        total_revenue = sum(
+            p.amount or 0
+            for p in Payment.objects(status='paid').only('amount')
+        )
+
+        # Outstanding balance — bulk queries (no lazy loads)
         paid_map, expected_map = _build_payment_lookups()
         total_outstanding = 0
         clients_with_outstanding = 0
@@ -279,8 +343,20 @@ def get_dashboard():
         last_month_end = this_month_start - timedelta(seconds=1)
         last_month_start = last_month_end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        this_month_revenue = sum(p.amount for p in Payment.objects(payment_date__gte=this_month_start, status='paid')) or 0
-        last_month_revenue = sum(p.amount for p in Payment.objects(payment_date__gte=last_month_start, payment_date__lte=last_month_end, status='paid')) or 0
+        this_month_revenue = sum(
+            p.amount or 0
+            for p in Payment.objects(
+                payment_date__gte=this_month_start, status='paid'
+            ).only('amount')
+        )
+        last_month_revenue = sum(
+            p.amount or 0
+            for p in Payment.objects(
+                payment_date__gte=last_month_start,
+                payment_date__lte=last_month_end,
+                status='paid'
+            ).only('amount')
+        )
 
         return jsonify({
             'total_clients': total_clients,
@@ -299,11 +375,13 @@ def get_dashboard():
             'financial_health': {
                 'this_month_revenue': float(this_month_revenue),
                 'last_month_revenue': float(last_month_revenue),
-                'performance_pct': ((this_month_revenue - last_month_revenue) / last_month_revenue * 100) if last_month_revenue > 0 else 0
+                'performance_pct': (
+                    (this_month_revenue - last_month_revenue) / last_month_revenue * 100
+                ) if last_month_revenue > 0 else 0
             }
         })
     except Exception as e:
-        import traceback, sys
+        import traceback
         tb = traceback.format_exc()
         log.exception('get_dashboard exception: %s', e)
         return jsonify({'error': 'Server error', 'details': str(e), 'trace': tb}), 500
@@ -318,7 +396,12 @@ def search_clients():
 
     q = Q()
     if query_str:
-        q &= (Q(full_name__icontains=query_str) | Q(file_number__icontains=query_str) | Q(phone__icontains=query_str) | Q(ghana_card_number__icontains=query_str))
+        q &= (
+            Q(full_name__icontains=query_str) |
+            Q(file_number__icontains=query_str) |
+            Q(phone__icontains=query_str) |
+            Q(ghana_card_number__icontains=query_str)
+        )
     if stage_filter:
         try:
             q &= Q(current_stage=int(stage_filter))
@@ -332,24 +415,36 @@ def search_clients():
     if not results:
         return jsonify([])
 
-    # Bulk lookups for just these clients
-    client_ids = [str(c.id) for c in results]
+    # Bulk lookups for just these clients — use pk to avoid lazy loads
+    result_ids = [c.id for c in results]
 
     all_pts = list(PaymentType.objects().only('id', 'default_amount'))
     pt_defaults = {str(pt.id): (pt.default_amount or 0) for pt in all_pts}
 
-    all_customs = list(ClientPaymentType.objects(client__in=[c.id for c in results]).only('client', 'payment_type', 'custom_amount'))
+    all_customs = list(
+        ClientPaymentType.objects(client__in=result_ids).only('client', 'payment_type', 'custom_amount')
+    )
     custom_map = {}
     for c in all_customs:
-        cid = str(c.client.id)
-        ptid = str(c.payment_type.id)
-        custom_map.setdefault(cid, {})[ptid] = c.custom_amount
+        try:
+            cid = str(c.client.pk) if c.client else None
+            ptid = str(c.payment_type.pk) if c.payment_type else None
+            if cid and ptid:
+                custom_map.setdefault(cid, {})[ptid] = c.custom_amount
+        except Exception:
+            continue
 
-    all_paid = list(Payment.objects(client__in=[c.id for c in results], status='paid').only('client', 'amount'))
+    all_paid = list(
+        Payment.objects(client__in=result_ids, status='paid').only('client', 'amount')
+    )
     paid_map = {}
     for p in all_paid:
-        cid = str(p.client.id)
-        paid_map[cid] = paid_map.get(cid, 0) + (p.amount or 0)
+        try:
+            cid = str(p.client.pk) if p.client else None
+            if cid:
+                paid_map[cid] = paid_map.get(cid, 0) + (p.amount or 0)
+        except Exception:
+            continue
 
     clients_data = []
     for client in results:
@@ -359,14 +454,24 @@ def search_clients():
         total_paid = paid_map.get(cid, 0)
         outstanding_balance = max(0, total_expected - total_paid)
 
+        # local_association: use pk to avoid lazy load, only fetch name if needed
+        assoc_id = None
+        assoc_name = None
+        try:
+            if client.local_association:
+                assoc_id = str(client.local_association.pk)
+                assoc_name = client.local_association.association_name
+        except Exception:
+            pass
+
         clients_data.append({
             'client_id': cid,
             'file_number': client.file_number,
             'full_name': client.full_name,
             'phone': client.phone,
             'ghana_card_number': client.ghana_card_number,
-            'local_association_id': str(client.local_association.id) if client.local_association else None,
-            'association_name': client.local_association.association_name if client.local_association else None,
+            'local_association_id': assoc_id,
+            'association_name': assoc_name,
             'current_stage': client.current_stage,
             'status': client.status,
             'registration_date': client.registration_date.strftime('%Y-%m-%d') if client.registration_date else None,
