@@ -31,8 +31,8 @@ def _build_payment_lookups():
     for c in all_customs:
         try:
             # Access the raw pk (DBRef id) without triggering a fetch
-            cid = str(c.client.pk) if c.client else None
-            ptid = str(c.payment_type.pk) if c.payment_type else None
+            cid = str(c.client.id) if c.client else None
+            ptid = str(c.payment_type.id) if c.payment_type else None
             if cid and ptid:
                 custom_map.setdefault(cid, {})[ptid] = c.custom_amount
         except Exception:
@@ -43,7 +43,7 @@ def _build_payment_lookups():
     paid_map = {}  # { str(client_id) -> total_paid }
     for p in all_paid:
         try:
-            cid = str(p.client.pk) if p.client else None
+            cid = str(p.client.id) if p.client else None
             if cid:
                 paid_map[cid] = paid_map.get(cid, 0) + (p.amount or 0)
         except Exception:
@@ -276,7 +276,7 @@ def get_dashboard():
         recent_client_pks = []
         for p in recent_payment_docs:
             try:
-                pk = p.client.pk if p.client else None
+                pk = p.client.id if p.client else None
                 if pk:
                     recent_client_pks.append(pk)
             except Exception:
@@ -293,7 +293,7 @@ def get_dashboard():
         recent_stage_pks = []
         for p in recent_payment_docs:
             try:
-                pk = p.stage.pk if p.stage else None
+                pk = p.stage.id if p.stage else None
                 if pk:
                     recent_stage_pks.append(pk)
             except Exception:
@@ -305,8 +305,8 @@ def get_dashboard():
         recent_payments_data = []
         for p in recent_payment_docs:
             try:
-                cid = str(p.client.pk) if p.client else None
-                sid = str(p.stage.pk) if p.stage else None
+                cid = str(p.client.id) if p.client else None
+                sid = str(p.stage.id) if p.stage else None
                 recent_payments_data.append({
                     'client_name': client_name_map.get(cid, 'Unknown') if cid else 'Unknown',
                     'amount': p.amount,
@@ -427,8 +427,8 @@ def search_clients():
     custom_map = {}
     for c in all_customs:
         try:
-            cid = str(c.client.pk) if c.client else None
-            ptid = str(c.payment_type.pk) if c.payment_type else None
+            cid = str(c.client.id) if c.client else None
+            ptid = str(c.payment_type.id) if c.payment_type else None
             if cid and ptid:
                 custom_map.setdefault(cid, {})[ptid] = c.custom_amount
         except Exception:
@@ -440,7 +440,7 @@ def search_clients():
     paid_map = {}
     for p in all_paid:
         try:
-            cid = str(p.client.pk) if p.client else None
+            cid = str(p.client.id) if p.client else None
             if cid:
                 paid_map[cid] = paid_map.get(cid, 0) + (p.amount or 0)
         except Exception:
