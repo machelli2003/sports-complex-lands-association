@@ -159,6 +159,7 @@ def register_client():
     }), 201
 
 
+
 @client_bp.route('/clients/<client_id>', methods=['GET'])
 @jwt_required()
 def get_client(client_id):
