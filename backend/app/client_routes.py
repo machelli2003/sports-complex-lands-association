@@ -21,38 +21,47 @@ def _build_payment_lookups():
     Uses __raw__ aggregation and .scalar() / pk access to avoid ANY lazy
     ReferenceField dereferencing that would cause a per-document round-trip.
     """
-    # 1. All payment types + defaults (one query)
+    # Use direct collection access and server-side aggregation to avoid
+    # mongoengine lazy dereferencing (which causes many round trips and
+    # can timeout / OOM under load on Render). This builds two maps:
+    #  paid_map: { str(client_id) -> total_paid }
+    #  expected_map: { str(client_id) -> total_expected }
+
+    # 1. Payment type defaults (still cheap via mongoengine)
     all_pts = list(PaymentType.objects().only('id', 'default_amount'))
     pt_defaults = {str(pt.id): (pt.default_amount or 0) for pt in all_pts}
 
-    # 2. All custom client-payment-type overrides — use pk to avoid lazy load
-    all_customs = list(ClientPaymentType.objects().only('client', 'payment_type', 'custom_amount'))
-    custom_map = {}  # { str(client_id) -> { str(pt_id) -> amount } }
-    for c in all_customs:
-        try:
-            # Access the raw pk (DBRef id) without triggering a fetch
-            cid = str(c.client.id) if c.client else None
-            ptid = str(c.payment_type.id) if c.payment_type else None
+    # 2. Client custom payment types — read raw documents from the collection
+    custom_map = {}
+    try:
+        cpt_coll = ClientPaymentType._get_collection()
+        for doc in cpt_coll.find({}, {'client': 1, 'payment_type': 1, 'custom_amount': 1}):
+            cid = str(doc.get('client')) if doc.get('client') else None
+            ptid = str(doc.get('payment_type')) if doc.get('payment_type') else None
             if cid and ptid:
-                custom_map.setdefault(cid, {})[ptid] = c.custom_amount
-        except Exception:
-            continue
+                custom_map.setdefault(cid, {})[ptid] = doc.get('custom_amount', 0)
+    except Exception:
+        custom_map = {}
 
-    # 3. All paid payments — use .pk to avoid lazy ReferenceField load
-    all_paid = list(Payment.objects(status='paid').only('client', 'amount'))
-    paid_map = {}  # { str(client_id) -> total_paid }
-    for p in all_paid:
-        try:
-            cid = str(p.client.id) if p.client else None
-            if cid:
-                paid_map[cid] = paid_map.get(cid, 0) + (p.amount or 0)
-        except Exception:
-            continue
+    # 3. Aggregate paid totals per-client on the DB side (fast)
+    paid_map = {}
+    try:
+        pay_coll = Payment._get_collection()
+        pipeline = [
+            {'$match': {'status': 'paid'}},
+            {'$group': {'_id': '$client', 'total': {'$sum': {'$ifNull': ['$amount', 0]}}}}
+        ]
+        for row in pay_coll.aggregate(pipeline):
+            _id = row.get('_id')
+            if _id:
+                paid_map[str(_id)] = row.get('total', 0)
+    except Exception:
+        paid_map = {}
 
-    # 4. Compute expected per client (one query for all client ids)
-    all_client_ids = [str(c.id) for c in Client.objects().only('id')]
+    # 4. Compute expected totals per client in Python, using client ids
+    client_ids = [str(c.id) for c in Client.objects().only('id')]
     expected_map = {}
-    for cid in all_client_ids:
+    for cid in client_ids:
         client_customs = custom_map.get(cid, {})
         total = 0
         for ptid, default in pt_defaults.items():
