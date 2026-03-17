@@ -73,8 +73,7 @@ def create_app():
     # subdomains (Render uses multiple domains for static/frontends).
     cors_origins = os.getenv('CORS_ORIGINS', '*')
     origins = [o.strip() for o in cors_origins.split(',')] if cors_origins and cors_origins != '*' else '*'
-    CORS(app, resources={r"/api/*": {"origins": origins}}, supports_credentials=True)
-
+    CORS(app, resources={r"/api/*": {"origins": origins, "supports_credentials": True, "allow_headers": ["Content-Type", "Authorization"], "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]}})
     @app.after_request
     def _ensure_cors_headers(response):
         response.headers.setdefault('Access-Control-Allow-Origin', '*')
