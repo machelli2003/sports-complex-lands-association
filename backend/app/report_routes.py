@@ -59,38 +59,101 @@ def get_total_transactions():
 @jwt_required()
 def get_outstanding_payments():
     """Get clients with outstanding payments for their current stage"""
-    from app.payment_utils import get_applicable_amount
+    # Optimized implementation using server-side aggregation and raw collection
+    # reads to avoid per-document dereferencing and many small queries.
+    # Steps:
+    #  - Load all clients (ids + meta)
+    #  - Load stages mapping by stage_number
+    #  - Load payment types grouped by stage id with default_amount
+    #  - Load client-payment-type overrides for relevant clients
+    #  - Aggregate paid totals per client+stage in the DB
+    #  - Compute expected per client by summing payment type defaults overridden by customs
 
-    clients = Client.objects()
+    # Load clients
+    clients = list(Client.objects().only('id', 'full_name', 'file_number', 'current_stage'))
+    if not clients:
+        return jsonify([])
+
+    # Map stage_number -> Stage (id + name)
+    stages = {s.stage_number: {'id': str(s.id), 'name': s.stage_name} for s in Stage.objects().only('id', 'stage_number', 'stage_name')}
+
+    # Load payment types grouped by stage id (use raw collection to avoid deref)
+    pt_coll = PaymentType._get_collection()
+    payment_types_by_stage = {}
+    for doc in pt_coll.find({}, {'_id': 1, 'stage': 1, 'default_amount': 1}):
+        stage_id = str(doc.get('stage')) if doc.get('stage') else None
+        ptid = str(doc.get('_id'))
+        if stage_id:
+            payment_types_by_stage.setdefault(stage_id, []).append({'id': ptid, 'default_amount': doc.get('default_amount', 0) or 0})
+
+    # Build list of client ids and map client metadata
+    client_meta = {}
+    client_ids = []
+    for c in clients:
+        cid = str(c.id)
+        client_ids.append(c.id)
+        client_meta[cid] = {'full_name': c.full_name, 'file_number': c.file_number, 'current_stage': c.current_stage}
+
+    # Load client-payment-type overrides for these clients
+    custom_map = {}
+    try:
+        cpt_coll = ClientPaymentType._get_collection()
+        for doc in cpt_coll.find({'client': {'$in': client_ids}}, {'client':1, 'payment_type':1, 'custom_amount':1}):
+            cid = str(doc.get('client')) if doc.get('client') else None
+            ptid = str(doc.get('payment_type')) if doc.get('payment_type') else None
+            if cid and ptid:
+                custom_map.setdefault(cid, {})[ptid] = doc.get('custom_amount', 0) or 0
+    except Exception:
+        custom_map = {}
+
+    # Aggregate paid totals by client and stage in DB
+    paid_map = {}  # {(client_id, stage_id) -> total}
+    try:
+        pay_coll = Payment._get_collection()
+        pipeline = [
+            {'$match': {'status': 'paid', 'client': {'$in': client_ids}}},
+            {'$group': {'_id': {'client': '$client', 'stage': '$stage'}, 'total': {'$sum': {'$ifNull': ['$amount', 0]}}}}
+        ]
+        for row in pay_coll.aggregate(pipeline):
+            key = row.get('_id')
+            if key and key.get('client'):
+                cid = str(key.get('client'))
+                sid = str(key.get('stage')) if key.get('stage') else None
+                paid_map[(cid, sid)] = row.get('total', 0)
+    except Exception:
+        paid_map = {}
+
     outstanding = []
+    for cid, meta in client_meta.items():
+        cur_stage_num = meta.get('current_stage')
+        stage_info = stages.get(cur_stage_num)
+        if not stage_info:
+            continue
+        stage_id = stage_info['id']
 
-    for client in clients:
-        current_stage = Stage.objects(stage_number=client.current_stage).first()
-        if not current_stage:
+        pts = payment_types_by_stage.get(stage_id, [])
+        if not pts:
             continue
 
-        stage_payment_types = PaymentType.objects(stage=current_stage.id)
-        if not stage_payment_types:
-            continue
-
+        # Compute expected using defaults + any client override
         total_expected = 0
-        for pt in stage_payment_types:
-            total_expected += get_applicable_amount(str(client.id), str(pt.id))
+        for pt in pts:
+            ptid = pt['id']
+            default = pt.get('default_amount', 0) or 0
+            total_expected += custom_map.get(cid, {}).get(ptid, default)
 
-        total_paid = sum(p.amount for p in Payment.objects(client=client.id, stage=current_stage.id, status='paid')) or 0
-
+        total_paid = paid_map.get((cid, stage_id), 0) or 0
         outstanding_amount = total_expected - total_paid
-
         if outstanding_amount > 0:
             outstanding.append({
-                'client_id': str(client.id),
-                'client': client.full_name,
-                'file_number': client.file_number,
+                'client_id': cid,
+                'client': meta.get('full_name'),
+                'file_number': meta.get('file_number'),
                 'total_expected': float(total_expected),
                 'total_paid': float(total_paid),
                 'outstanding_amount': float(outstanding_amount),
-                'current_stage': client.current_stage,
-                'stage_name': current_stage.stage_name
+                'current_stage': cur_stage_num,
+                'stage_name': stage_info.get('name')
             })
 
     outstanding.sort(key=lambda x: x['outstanding_amount'], reverse=True)
