@@ -234,6 +234,16 @@ def get_dashboard():
     log = logging.getLogger(__name__)
     try:
         log.info('get_dashboard called')
+        # Log presence (only) of Authorization header for debugging missing-token issues
+        auth_hdr = request.headers.get('Authorization')
+        if not auth_hdr:
+            log.warning('get_dashboard: Missing Authorization header')
+        else:
+            # Log only that it exists and its length — do NOT log token contents
+            try:
+                log.info('get_dashboard: Authorization header present (len=%d)', len(auth_hdr))
+            except Exception:
+                log.info('get_dashboard: Authorization header present')
 
         total_clients = Client.objects.count()
         active_clients = Client.objects(status='active').count()
