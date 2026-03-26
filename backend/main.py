@@ -22,12 +22,11 @@ load_dotenv()
 
 from config import Config
 import mongoengine as me
-from mongoengine import connect as me_connect
 import threading
 import importlib
 import time
-import logging
 import sys
+
 
 def create_app():
     # configure logging early
@@ -35,10 +34,11 @@ def create_app():
         setup_logging()
     except Exception:
         pass
+
     app = Flask(__name__)
     log = logging.getLogger(__name__)
     app.config.from_object(Config)
-    
+
     app.config['UPLOAD_FOLDER'] = os.path.join(app.instance_path, 'uploads')
     app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'default-dev-secret-key')
     from datetime import timedelta
@@ -58,15 +58,38 @@ def create_app():
     receipts_folder = os.path.join(app.instance_path, 'receipts')
     os.makedirs(receipts_folder, exist_ok=True)
 
+    # ------------------------------------------------------------------ #
+    #  MongoDB connection
+    #  flask-mongoengine (db.init_app) handles Flask app-context queries.
+    #  me.connect() registers the "default" alias that raw MongoEngine
+    #  document queries (Model.objects()) rely on outside the app context.
+    #  Both must point to the same URI.
+    # ------------------------------------------------------------------ #
     db.init_app(app)
 
-    # Allow cross-origin requests to the API. In production you may want to
-    # restrict this via the CORS_ORIGINS env var, but default to permissive
-    # to avoid CORS-related errors from browser clients hosted on other
-    # subdomains (Render uses multiple domains for static/frontends).
+    mongo_uri = app.config.get('MONGODB_HOST')
+    if mongo_uri:
+        try:
+            me.disconnect(alias='default')
+            me.connect(host=mongo_uri, alias='default')
+            log.info('[OK] Connected to MongoDB via MongoEngine')
+        except Exception as e:
+            log.error(f'[ERROR] Could not connect to MongoDB: {e}')
+    else:
+        log.error('[ERROR] No MongoDB URI found — set MONGODB_URI in your Render environment variables')
+
+    # ------------------------------------------------------------------ #
+    #  CORS
+    # ------------------------------------------------------------------ #
     cors_origins = os.getenv('CORS_ORIGINS', '*')
     origins = [o.strip() for o in cors_origins.split(',')] if cors_origins and cors_origins != '*' else '*'
-    CORS(app, resources={r"/api/*": {"origins": origins, "supports_credentials": True, "allow_headers": ["Content-Type", "Authorization"], "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]}})
+    CORS(app, resources={r"/api/*": {
+        "origins": origins,
+        "supports_credentials": True,
+        "allow_headers": ["Content-Type", "Authorization"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    }})
+
     @app.after_request
     def _ensure_cors_headers(response):
         response.headers.setdefault('Access-Control-Allow-Origin', '*')
@@ -75,14 +98,18 @@ def create_app():
         response.headers.setdefault('X-Content-Type-Options', 'nosniff')
         response.headers.setdefault('X-Frame-Options', 'DENY')
         response.headers.setdefault('Referrer-Policy', 'no-referrer-when-downgrade')
-        csp = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; connect-src 'self' ws: https:;"
+        csp = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "style-src 'self' 'unsafe-inline' https:; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self' ws: https:;"
+        )
         response.headers.setdefault('Content-Security-Policy', csp)
         return response
 
     @app.errorhandler(Exception)
     def _handle_exception(e):
-        import traceback, sys
-        tb = traceback.format_exc()
         logging.getLogger(__name__).exception('Unhandled exception: %s', str(e))
         resp = jsonify({'error': 'Server error', 'details': str(e)})
         resp.status_code = 500
@@ -91,30 +118,33 @@ def create_app():
         resp.headers.setdefault('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
         return resp
 
-    from app import models 
+    # ------------------------------------------------------------------ #
+    #  Blueprints
+    # ------------------------------------------------------------------ #
+    from app import models
 
     from app.association_routes import association_bp
     app.register_blueprint(association_bp, url_prefix='/api')
-    
+
     from app.stage_routes import stage_bp
     app.register_blueprint(stage_bp, url_prefix='/api')
-    
+
     from app.document_routes import document_bp
     app.register_blueprint(document_bp, url_prefix='/api')
-    
+
     from app.payment_routes import payment_bp
     app.register_blueprint(payment_bp, url_prefix='/api')
-    print(f"[OK] Payment blueprint registered at /api/payments")
+    print('[OK] Payment blueprint registered at /api/payments')
 
     from app.client_routes import client_bp
     app.register_blueprint(client_bp, url_prefix='/api')
-    
+
     from app.report_routes import report_bp
     app.register_blueprint(report_bp, url_prefix='/api')
-    
+
     from app.user_routes import user_bp
     app.register_blueprint(user_bp, url_prefix='/api')
-    
+
     from app.payment_type_routes import payment_type_bp
     app.register_blueprint(payment_type_bp, url_prefix='/api')
 
@@ -123,16 +153,20 @@ def create_app():
 
     from app.client_payment_routes import client_payment_bp
     app.register_blueprint(client_payment_bp, url_prefix='/api')
-    print(f"[OK] Client payment routes registered at /api/clients/<id>/payment-amounts")
+    print('[OK] Client payment routes registered at /api/clients/<id>/payment-amounts')
 
     from app.audit_routes import audit_bp
     app.register_blueprint(audit_bp, url_prefix='/api')
 
-    print("\n[INFO] Registered routes:")
+    print('\n[INFO] Registered routes:')
     for rule in app.url_map.iter_rules():
         if 'payment' in rule.rule:
-            print(f"  {rule.methods} {rule.rule}")
+            print(f'  {rule.methods} {rule.rule}')
     print()
+
+    # ------------------------------------------------------------------ #
+    #  Core routes
+    # ------------------------------------------------------------------ #
     @app.route('/')
     def index():
         return jsonify({'message': 'Sports Complex API is running'}), 200
@@ -141,67 +175,48 @@ def create_app():
     def health():
         result = {'status': 'ok'}
         try:
-            mongo_uri = app.config.get('MONGO_URI') or app.config.get('MONGODB_HOST')
-            if mongo_uri:
-                try:
-                    dbobj = me.connection.get_db()
-                    dbobj.client.admin.command('ping')
-                    result['db'] = 'ok'
-                except Exception as e:
-                    result['db'] = 'error'
-                    result['db_error'] = str(e)
-            else:
-                result['db'] = 'not-configured'
+            dbobj = me.connection.get_db()
+            dbobj.client.admin.command('ping')
+            result['db'] = 'ok'
         except Exception as e:
-            result['status'] = 'error'
-            result['error'] = str(e)
-        status_code = 200 if result.get('db') in ('ok', 'not-configured') else 500
+            result['db'] = 'error'
+            result['db_error'] = str(e)
+        status_code = 200 if result.get('db') == 'ok' else 500
         return jsonify(result), status_code
 
+    # ------------------------------------------------------------------ #
+    #  Rate limiting
+    # ------------------------------------------------------------------ #
     rate_limit = os.getenv('RATE_LIMIT') or '200 per day;50 per hour'
     limiter = Limiter(key_func=get_remote_address, default_limits=[rate_limit])
     limiter.init_app(app)
 
-    # Ensure we don't register duplicate Prometheus timeseries when create_app()
-    # is called multiple times (debug modules/imports). Reuse existing collectors
-    # from the default registry when available.
+    # ------------------------------------------------------------------ #
+    #  Prometheus metrics
+    # ------------------------------------------------------------------ #
     from prometheus_client import REGISTRY
 
-    # Create metrics, but if they are already registered (ValueError), reuse
-    # the existing collector from the default REGISTRY internals.
     try:
         REQUEST_COUNT = Counter('app_request_count', 'Total HTTP requests', ['method', 'endpoint', 'http_status'])
     except ValueError:
-        # Try to reuse existing collector from registry internals
-        REQUEST_COUNT = None
-        try:
-            REQUEST_COUNT = REGISTRY._names_to_collectors.get('app_request_count')
-        except Exception:
-            REQUEST_COUNT = None
+        REQUEST_COUNT = REGISTRY._names_to_collectors.get('app_request_count')
         if REQUEST_COUNT is None:
-            # Last resort: create a no-op counter wrapper
             class _Noop:
-                def labels(self, *args, **kwargs):
+                def labels(self, *a, **k):
                     class _L:
-                        def inc(self, *a, **k):
-                            return None
+                        def inc(self, *a, **k): return None
                     return _L()
             REQUEST_COUNT = _Noop()
 
     try:
         REQUEST_LATENCY = Histogram('app_request_latency_seconds', 'Request latency', ['endpoint'])
     except ValueError:
-        REQUEST_LATENCY = None
-        try:
-            REQUEST_LATENCY = REGISTRY._names_to_collectors.get('app_request_latency_seconds')
-        except Exception:
-            REQUEST_LATENCY = None
+        REQUEST_LATENCY = REGISTRY._names_to_collectors.get('app_request_latency_seconds')
         if REQUEST_LATENCY is None:
             class _NoopHist:
-                def labels(self, *args, **kwargs):
+                def labels(self, *a, **k):
                     class _L:
-                        def observe(self, *a, **k):
-                            return None
+                        def observe(self, *a, **k): return None
                     return _L()
             REQUEST_LATENCY = _NoopHist()
 
@@ -224,8 +239,11 @@ def create_app():
         data = generate_latest()
         return data, 200, {'Content-Type': CONTENT_TYPE_LATEST}
 
-    # Temporary protected debug endpoint. Enabled when DEBUG_TOKEN is set.
+    # ------------------------------------------------------------------ #
+    #  Debug info endpoint (protected by DEBUG_TOKEN env var)
+    # ------------------------------------------------------------------ #
     debug_token = os.getenv('DEBUG_TOKEN')
+
     @app.route('/debug/info', methods=['GET'])
     def debug_info():
         token = None
@@ -239,36 +257,38 @@ def create_app():
         info = {
             'env': {
                 'CORS_ORIGINS': os.getenv('CORS_ORIGINS'),
-                'MONGO_URI_present': bool(os.getenv('MONGO_URI') or os.getenv('MONGODB_HOST'))
+                'MONGODB_URI_present': bool(
+                    os.getenv('MONGODB_URI') or
+                    os.getenv('MONGO_URI') or
+                    os.getenv('MONGODB_HOST')
+                ),
             },
             'routes_count': len(list(app.url_map.iter_rules()))
         }
         try:
-            db_ok = False
-            try:
-                dbobj = me.connection.get_db()
-                dbobj.client.admin.command('ping')
-                db_ok = True
-            except Exception:
-                db_ok = False
-            info['db_ok'] = db_ok
-        except Exception:
-            info['db_ok'] = 'unknown'
+            dbobj = me.connection.get_db()
+            dbobj.client.admin.command('ping')
+            info['db_ok'] = True
+        except Exception as e:
+            info['db_ok'] = False
+            info['db_error'] = str(e)
         return jsonify(info), 200
 
     return app
+
 
 # ----------------------------
 # Module-level WSGI app for Gunicorn / Render
 # ----------------------------
 app = create_app()
-application = app  # optional for some platforms
+application = app
+
 
 # ----------------------------
 # Local development server
 # ----------------------------
 if __name__ == '__main__':
-    print("--- Server Starting ---")
+    print('--- Server Starting ---')
     debug_mode = os.getenv('FLASK_ENV') == 'development'
     port = int(os.getenv('PORT', 5001))
     auto_run = os.getenv('AUTO_RUN_DEBUG_SCRIPTS', '0') == '1' or debug_mode
@@ -304,9 +324,8 @@ if __name__ == '__main__':
             try:
                 m = importlib.import_module(mod_name)
             except Exception as e:
-                print(f"[DEBUG_RUNNER] Could not import {mod_name}: {e}")
+                print(f'[DEBUG_RUNNER] Could not import {mod_name}: {e}')
                 continue
-
             candidates = ('run', 'main', 'debug_login', 'test_login', 'debug', 'execute', 'check')
             func = None
             for attr in candidates:
@@ -314,15 +333,14 @@ if __name__ == '__main__':
                 if callable(func):
                     break
                 func = None
-
             if callable(func):
-                print(f"[DEBUG_RUNNER] Running {mod_name}.{func.__name__}()")
+                print(f'[DEBUG_RUNNER] Running {mod_name}.{func.__name__}()')
                 try:
                     func()
                 except Exception as e:
-                    print(f"[DEBUG_RUNNER] Error running {mod_name}.{func.__name__}: {e}")
+                    print(f'[DEBUG_RUNNER] Error running {mod_name}.{func.__name__}: {e}')
             else:
-                print(f"[DEBUG_RUNNER] No runnable entrypoint found in {mod_name}; skipping")
+                print(f'[DEBUG_RUNNER] No runnable entrypoint found in {mod_name}; skipping')
 
     if backend_dir not in sys.path:
         sys.path.insert(0, backend_dir)
@@ -339,9 +357,9 @@ if __name__ == '__main__':
 
     if auto_run:
         if not modules_to_run:
-            print("[DEBUG_RUNNER] Auto-run enabled but no candidate modules found to run.")
+            print('[DEBUG_RUNNER] Auto-run enabled but no candidate modules found to run.')
         else:
-            print(f"[DEBUG_RUNNER] Auto-run enabled. Starting debug thread for modules: {modules_to_run}")
+            print(f'[DEBUG_RUNNER] Auto-run enabled. Starting debug thread for modules: {modules_to_run}')
             t = threading.Thread(target=_run_debug_after_start, args=(modules_to_run, 1.5), daemon=True)
             t.start()
 
