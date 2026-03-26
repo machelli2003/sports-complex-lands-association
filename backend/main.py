@@ -59,13 +59,6 @@ def create_app():
     os.makedirs(receipts_folder, exist_ok=True)
 
     db.init_app(app)
-    mongo_uri = app.config.get('MONGO_URI') or app.config.get('MONGODB_HOST')
-    if mongo_uri:
-        try:
-            me_connect(host=mongo_uri)
-            log.info('[OK] Connected to MongoDB via MongoEngine')
-        except Exception as e:
-            log.warning(f'[WARN] Could not connect to MongoDB: {e}')
 
     # Allow cross-origin requests to the API. In production you may want to
     # restrict this via the CORS_ORIGINS env var, but default to permissive

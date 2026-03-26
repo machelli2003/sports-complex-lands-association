@@ -1,21 +1,37 @@
 import os
 
-# __file__ is always the config.py absolute path when the module is imported
+# Absolute path to the directory containing this file (backend root)
 _HERE = os.path.abspath(os.path.dirname(__file__))
+
+# Instance directory for local file storage (uploads, receipts, legacy SQLite)
 _INSTANCE_DIR = os.path.join(_HERE, 'instance')
 os.makedirs(_INSTANCE_DIR, exist_ok=True)
 
-_DB_FILE = os.path.join(_INSTANCE_DIR, 'sports_complex.db')
 
 class Config:
+    # ------------------------------------------------------------------ #
+    #  Security
+    # ------------------------------------------------------------------ #
     SECRET_KEY = os.environ.get('SECRET_KEY', 'super-secret-key')
-    # SQLAlchemy/SQLite settings removed; app now uses MongoEngine (MongoDB).
-    # If you need to run legacy migration scripts they may still read the
-    # existing SQLite DB file in `instance/` but the running app uses MongoDB.
     JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'super-secret-key')
+
+    # ------------------------------------------------------------------ #
+    #  MongoDB / MongoEngine
+    #  flask-mongoengine reads MONGODB_HOST from Flask config automatically.
+    #  We support three env-var names so local .env and Render both work.
+    # ------------------------------------------------------------------ #
+    MONGODB_HOST = (
+        os.environ.get('MONGODB_URI') or
+        os.environ.get('MONGO_URI') or
+        os.environ.get('MONGODB_HOST') or
+        ''
+    )
+
+    # ------------------------------------------------------------------ #
+    #  File storage
+    # ------------------------------------------------------------------ #
     UPLOAD_FOLDER = os.path.join(_INSTANCE_DIR, 'uploads')
+    RECEIPTS_FOLDER = os.path.join(_INSTANCE_DIR, 'receipts')
+
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-    # MongoDB / MongoEngine settings (use MongoDB Atlas URI via MONGO_URI or MONGODB_URI)
-    # Support multiple env var names to match `.env` variants
-    MONGO_URI = os.environ.get('MONGO_URI') or os.environ.get('MONGODB_URI') or os.environ.get('MONGODB_HOST') or ''
-    MONGODB_HOST = os.environ.get('MONGO_URI') or os.environ.get('MONGODB_URI') or os.environ.get('MONGODB_HOST') or ''
+    os.makedirs(RECEIPTS_FOLDER, exist_ok=True)
