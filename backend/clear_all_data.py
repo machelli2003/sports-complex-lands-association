@@ -1,6 +1,5 @@
 --------------------------------------------------------#!/usr/bin/env python3
-"""Wrapper to run `scripts/clear_all_data.py` from the `backend` directory.
-"""
+"""Wrapper to run `scripts/clear_all_data.py` from the `backend` directo
 from __future__ import annotations
 import runpy
 from pathlib import Path
