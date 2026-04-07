@@ -1,5 +1,12 @@
 MongoDB name: NBLAadmin
-Collections: ['clients', 'users', 'payments']
-  clients: 0
-  users: 1
-  payments: 0
+Collections: ['client_stages', 'client_payment_types', 'clients', 'local_associations', 'users', 'client_documents', 'stages', 'payments', 'audit_logs', 'payment_types']
+  client_stages: 9
+  client_payment_types: 16
+  clients: 23
+  local_associations: 17
+  users: 2
+  client_documents: 21
+  stages: 5
+  payments: 1
+  audit_logs: 64
+  payment_types: 8

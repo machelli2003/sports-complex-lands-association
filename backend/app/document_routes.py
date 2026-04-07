@@ -1,11 +1,22 @@
-from flask import Blueprint, request, jsonify, send_from_directory
+from flask import Blueprint, request, jsonify, send_file
 from app.models import ClientDocument
 from flask_jwt_extended import jwt_required
 from datetime import datetime
+import gridfs
+import io
+from pymongo import MongoClient
+from bson import ObjectId
 import os
 from app.file_utils import validate_file
 
 document_bp = Blueprint('document_bp', __name__)
+
+# GridFS setup — reuse your existing MongoDB connection string
+MONGO_URI = os.environ.get("MONGODB_URI")  # make sure this env var is set on Render
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client.get_default_database()
+fs = gridfs.GridFS(db)
+
 
 @document_bp.route('/documents', methods=['POST'])
 @jwt_required()
@@ -15,31 +26,34 @@ def add_document():
         if file.filename == '':
             return jsonify({'error': 'No file selected'}), 400
 
-        if file:
-            is_valid, error = validate_file(file)
-            if not is_valid:
-                return jsonify({'error': error}), 400
-                
-            filename = f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
-            file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'instance', 'uploads', filename)
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            file.save(file_path)
+        is_valid, error = validate_file(file)
+        if not is_valid:
+            return jsonify({'error': error}), 400
 
-            document = ClientDocument(
-                client=request.form['client_id'],
-                document_type=request.form['document_type'],
-                file_path=filename,
-                submission_date=datetime.utcnow(),
-                verified=False,
-                notes=request.form.get('notes', '')
-            )
-            document.save()
+        # Save file into MongoDB GridFS instead of disk
+        filename = f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
+        grid_file_id = fs.put(
+            file.read(),
+            filename=filename,
+            content_type=file.content_type
+        )
 
-            return jsonify({
-                'message': 'Document uploaded successfully',
-                'document_id': str(document.id),
-                'filename': filename
-            }), 201
+        document = ClientDocument(
+            client=request.form['client_id'],
+            document_type=request.form['document_type'],
+            file_path=str(grid_file_id),  # store GridFS ID instead of disk path
+            submission_date=datetime.utcnow(),
+            verified=False,
+            notes=request.form.get('notes', '')
+        )
+        document.save()
+
+        return jsonify({
+            'message': 'Document uploaded successfully',
+            'document_id': str(document.id),
+            'filename': filename
+        }), 201
+
     else:
         data = request.json
         document = ClientDocument(
@@ -51,6 +65,7 @@ def add_document():
         )
         document.save()
         return jsonify({'message': 'Document added', 'document_id': str(document.id)}), 201
+
 
 @document_bp.route('/documents/<client_id>', methods=['GET'])
 @jwt_required()
@@ -68,6 +83,7 @@ def get_documents(client_id):
         } for d in documents
     ])
 
+
 @document_bp.route('/documents/<document_id>/verify', methods=['PUT'])
 @jwt_required()
 def verify_document(document_id):
@@ -80,30 +96,31 @@ def verify_document(document_id):
     document.save()
     return jsonify({'message': 'Document verified successfully'})
 
+
 @document_bp.route('/documents/<document_id>/file', methods=['GET'])
 @jwt_required()
 def get_document_file(document_id):
-    """Securely serve document files after authentication"""
     document = ClientDocument.objects(id=document_id).first()
     if not document:
         return jsonify({'message': 'Document not found'}), 404
 
     if not document.file_path:
         return jsonify({'error': 'No file associated with this document'}), 404
-    
-    # Securely construct path
-    uploads_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'instance', 'uploads')
-    file_path = os.path.join(uploads_dir, document.file_path)
-    
-    if not os.path.exists(file_path):
-        return jsonify({'error': 'File not found'}), 404
-    
-    return send_from_directory(uploads_dir, document.file_path)
+
+    try:
+        grid_file = fs.get(ObjectId(document.file_path))
+        return send_file(
+            io.BytesIO(grid_file.read()),
+            mimetype=grid_file.content_type,
+            download_name=grid_file.filename
+        )
+    except Exception as e:
+        return jsonify({'error': f'File not found in storage: {str(e)}'}), 404
+
 
 @document_bp.route('/documents/<document_id>/download', methods=['GET'])
 @jwt_required()
 def download_document(document_id):
-    """Authenticated endpoint to download documents"""
     document = ClientDocument.objects(id=document_id).first()
     if not document:
         return jsonify({'message': 'Document not found'}), 404
@@ -111,5 +128,13 @@ def download_document(document_id):
     if not document.file_path:
         return jsonify({'error': 'No file associated with this document'}), 404
 
-    uploads_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'instance', 'uploads')
-    return send_from_directory(uploads_dir, document.file_path, as_attachment=True)
+    try:
+        grid_file = fs.get(ObjectId(document.file_path))
+        return send_file(
+            io.BytesIO(grid_file.read()),
+            mimetype=grid_file.content_type,
+            download_name=grid_file.filename,
+            as_attachment=True
+        )
+    except Exception as e:
+        return jsonify({'error': f'File not found in storage: {str(e)}'}), 404

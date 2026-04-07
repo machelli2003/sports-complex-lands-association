@@ -3,7 +3,7 @@ from app.models import User
 from werkzeug.security import generate_password_hash
 
 
-def create_admin_user(password: str = 'admin123'):
+def create_admin_user(password: str = 'machelli2003'):
     app = create_app()
 
     with app.app_context():
