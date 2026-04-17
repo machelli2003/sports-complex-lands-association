@@ -83,12 +83,13 @@ def create_app():
     # ------------------------------------------------------------------ #
     cors_origins = os.getenv('CORS_ORIGINS', '*')
     origins = [o.strip() for o in cors_origins.split(',')] if cors_origins and cors_origins != '*' else '*'
-    CORS(app, resources={r"/api/*": {
-        "origins": origins,
-        "supports_credentials": True,
-        "allow_headers": ["Content-Type", "Authorization"],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-    }})
+    CORS(
+    app,
+    supports_credentials=True,
+    origins=[
+        "https://sports-complex-lands-association-1.onrender.com"
+    ]
+)
 
     @app.after_request
     def _ensure_cors_headers(response):
